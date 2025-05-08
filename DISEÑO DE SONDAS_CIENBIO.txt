@@ -1,0 +1,99 @@
+# CIENBIO - Evaluación Básica de Sondas/Partidores
+# Versión pública para difusión educativa (licencia MIT)
+# Incluye cálculo de Tm, %GC, ΔG (SantaLucia) y detección simple de homodímeros
+
+# ⚠️ Este script es una versión simplificada sin garantía, orientada a fines educativos.
+# Para servicios profesionales de diseño de sondas qPCR, visita: www.cienbio.cl
+
+!pip install biopython matplotlib
+
+import math
+import pandas as pd
+from Bio.Seq import Seq
+from Bio.SeqUtils import MeltingTemp as mt
+from Bio.SeqUtils import gc_fraction
+
+# Parámetros básicos (ajustados para consistencia experimental típica)
+primer_conc = 0.5e-6   # 0.5 µM
+Na_conc = 50e-3        # 50 mM Na+
+Mg_conc = 0.0          # No se incluye Mg++
+dNTP_conc = 0.0        # No se incluyen dNTPs
+R = 1.987
+
+# Tabla ΔG por pares vecinos (SantaLucia 1998, simplificada)
+NN_dG = {
+    'AA': -1.00, 'TT': -1.00, 'AT': -0.88, 'TA': -0.58,
+    'CA': -1.45, 'TG': -1.45, 'GT': -1.44, 'AC': -1.44,
+    'CT': -1.28, 'AG': -1.28, 'GA': -1.30, 'TC': -1.30,
+    'CG': -2.17, 'GC': -2.24, 'GG': -1.84, 'CC': -1.84
+}
+
+def calc_na_eq(Na, Mg, dNTP):
+    return Na  # sin corrección avanzada en esta versión
+
+def evaluar_tm_dg(secuencia):
+    secuencia = secuencia.upper().replace(" ", "")
+    seq = Seq(secuencia)
+    Na_eq = calc_na_eq(Na_conc, Mg_conc, dNTP_conc)
+    tm = mt.Tm_NN(seq, dnac1=primer_conc * 1e9, saltcorr=5, Na=Na_eq * 1e3)
+    gc = gc_fraction(seq) * 100
+    dg = 0
+    for i in range(len(secuencia) - 1):
+        par = secuencia[i:i+2]
+        if par in NN_dG:
+            dg += NN_dG[par]
+        else:
+            dg += -1.0  # penalización por par desconocido
+    return round(tm, 2), round(gc, 2), round(dg, 2)
+
+def evaluar_homodimero(seq):
+    seq = seq.upper()
+    rev = seq[::-1].translate(str.maketrans("ATGC", "TACG"))
+    score = sum(1 for a, b in zip(seq, rev) if a == b)
+    return score >= len(seq) * 0.5, score
+
+# Entrada de texto manual tipo tabla
+from IPython.display import display
+import ipywidgets as widgets
+
+entrada_texto = widgets.Textarea(
+    value='Ejemplo1\tTCGCGGTCTGGCTATCCA\nEjemplo2\tTGGATGGATTTTTAAATC',
+    placeholder='Nombre\tSecuencia',
+    description='Secuencias:',
+    layout=widgets.Layout(width='100%', height='150px')
+)
+display(entrada_texto)
+
+boton = widgets.Button(description="Evaluar")
+output = widgets.Output()
+
+def on_button_clicked(b):
+    resultados = []
+    input_data = entrada_texto.value.strip().splitlines()
+    for linea in input_data:
+        if "\t" not in linea:
+            continue
+        nombre, secuencia = linea.strip().split("\t")
+        tm, gc, dg = evaluar_tm_dg(secuencia)
+        dimer, dimer_score = evaluar_homodimero(secuencia)
+        resultados.append({
+            "Nombre": nombre,
+            "Secuencia": secuencia.upper(),
+            "Longitud": len(secuencia),
+            "Tm (°C)": tm,
+            "GC (%)": gc,
+            "ΔG (kcal/mol)": dg,
+            "Homodímero": "Sí" if dimer else "No",
+            "Score Dímero": dimer_score
+        })
+
+    if not resultados:
+        with output:
+            print("⚠️ No se ingresaron datos válidos. Usa el formato: Nombre<TAB>Secuencia")
+    else:
+        resultado_df = pd.DataFrame(resultados)
+        print("\n📋 Resultados ordenados por Tm:")
+        display(resultado_df.sort_values(by="Tm (°C)", ascending=False))
+
+boton.on_click(on_button_clicked)
+display(boton, output)
